@@ -1,0 +1,67 @@
+# ── Virtual environment (5000+ files — never commit) ─────────────────────────
+venv/
+.venv/
+env/
+.env/
+ENV/
+
+# ── SQLite database files (auto-created by ETL) ───────────────────────────────
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# ── Python bytecode ───────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# ── Raw data CSV files (too large, downloadable from source) ─────────────────
+data/*.csv
+data/*.zip
+data/*.shp
+data/*.dbf
+data/*.prj
+data/*.geojson
+data/*.xlsx
+data/*.xls
+data/*.xml
+# Keep the placeholder so git tracks the empty data/ folder
+!data/.gitkeep
+
+# ── Environment / secrets ─────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── Build / dist ──────────────────────────────────────────────────────────────
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+wheels/
+
+# ── Testing / coverage ────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# ── Editors / OS ──────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/
