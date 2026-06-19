@@ -31,7 +31,7 @@ def list_accidents(
     participant: Optional[str] = Query(
         None, enum=["bicycle", "car", "pedestrian", "motorcycle", "truck", "other"]
     ),
-    limit:  int = Query(100, ge=1, le=1000),
+    limit:  int = Query(100, ge=1, le=5000),
     offset: int = Query(0, ge=0),
     db: DBConnection = Depends(get_db),
 ):
