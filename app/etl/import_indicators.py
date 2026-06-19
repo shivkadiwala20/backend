@@ -14,9 +14,7 @@ Also seeds state-level population figures from hardcoded Destatis 2023 values
 (used for cross-source rate-per-100k queries when GENESIS API is unavailable).
 """
 
-import json
 import os
-import sqlite3
 from pathlib import Path
 
 import pandas as pd
@@ -27,19 +25,16 @@ from ..utils.ags import STATE_NAMES, STATE_POPULATION_2023
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Helper: ensure indicator exists and return its id
-# ─────────────────────────────────────────────────────────────────────────────
 def _upsert_indicator(conn, code: str, label: str, unit: str, source_system: str) -> int:
     conn.execute(
         """INSERT INTO statistical_indicators(code, label, unit, source_system)
-           VALUES(?,?,?,?)
-           ON CONFLICT(code) DO UPDATE
-             SET label=excluded.label, unit=excluded.unit, source_system=excluded.source_system""",
+           VALUES(%s, %s, %s, %s)
+           ON CONFLICT (code) DO UPDATE
+             SET label=EXCLUDED.label, unit=EXCLUDED.unit, source_system=EXCLUDED.source_system""",
         [code, label, unit, source_system],
     )
     row = conn.execute(
-        "SELECT indicator_id FROM statistical_indicators WHERE code=?", [code]
+        "SELECT indicator_id FROM statistical_indicators WHERE code=%s", [code]
     ).fetchone()
     return row["indicator_id"]
 
@@ -47,11 +42,11 @@ def _upsert_indicator(conn, code: str, label: str, unit: str, source_system: str
 def _upsert_location(conn, ags: str, name: str, location_type: str, parent_ags=None) -> int:
     conn.execute(
         """INSERT INTO locations(ags, name, location_type, parent_ags)
-           VALUES(?,?,?,?)
-           ON CONFLICT(ags) DO UPDATE SET name=excluded.name""",
+           VALUES(%s, %s, %s, %s)
+           ON CONFLICT (ags) DO UPDATE SET name=EXCLUDED.name""",
         [ags, name, location_type, parent_ags],
     )
-    row = conn.execute("SELECT location_id FROM locations WHERE ags=?", [ags]).fetchone()
+    row = conn.execute("SELECT location_id FROM locations WHERE ags=%s", [ags]).fetchone()
     return row["location_id"]
 
 
@@ -61,7 +56,7 @@ def _upsert_location(conn, ags: str, name: str, location_type: str, parent_ags=N
 def seed_population(conn=None):
     """
     Insert/update state-level population for 2023 from hardcoded Destatis values.
-    This enables the cross-source rate-per-100k query even without GENESIS API.
+    Enables the cross-source rate-per-100k query without a live GENESIS API call.
     Source: Destatis, Bevölkerungsstand 2023 — dl-de/by-2-0
     """
     close = conn is None
@@ -77,12 +72,12 @@ def seed_population(conn=None):
     )
 
     for ags, pop in STATE_POPULATION_2023.items():
-        name = STATE_NAMES[ags]
+        name   = STATE_NAMES[ags]
         loc_id = _upsert_location(conn, ags, name, "state")
         conn.execute(
             """INSERT INTO statistical_values(location_id, indicator_id, year, value)
-               VALUES(?,?,2023,?)
-               ON CONFLICT(location_id, indicator_id, year) DO UPDATE SET value=excluded.value""",
+               VALUES(%s, %s, 2023, %s)
+               ON CONFLICT (location_id, indicator_id, year) DO UPDATE SET value=EXCLUDED.value""",
             [loc_id, ind_id, pop],
         )
 
@@ -116,14 +111,15 @@ def import_rate_per_10000(file_path: str):
     """
     conn = get_connection()
 
-    cur = conn.execute(
+    row = conn.execute(
         """INSERT INTO data_sources(name, origin_url, file_name, license, run_status)
            VALUES('Unfallatlas — Unfälle je 10.000 Einwohner',
                   'https://www.opengeodata.nrw.de/produkte/transport_verkehr/unfallatlas/',
-                  ?, 'dl-de/by-2-0', 'running')""",
+                  %s, 'dl-de/by-2-0', 'running')
+           RETURNING source_id""",
         [os.path.basename(file_path)],
-    )
-    ds_id = cur.lastrowid
+    ).fetchone()
+    ds_id = row["source_id"]
     conn.commit()
 
     try:
@@ -139,22 +135,20 @@ def import_rate_per_10000(file_path: str):
             "Unfallatlas-Fallback",
         )
 
-        # Detect format
         year_cols = [c for c in df.columns if c.isdigit() and 2016 <= int(c) <= 2025]
-        inserted = 0
+        inserted  = 0
 
         if year_cols:
-            # WIDE format: each year is a column
             key_col  = next((c for c in df.columns if "schluessel" in c.lower() or c.lower() == "ags"), None)
             name_col = next((c for c in df.columns if "gebiet" in c.lower() or "name" in c.lower()), None)
 
             for _, row in df.iterrows():
                 ags  = str(row[key_col]).strip().zfill(2) if key_col else None
-                name = str(row[name_col]).strip() if name_col else "Unknown"
+                name = str(row[name_col]).strip()         if name_col else "Unknown"
                 if not ags or not ags.isdigit():
                     continue
                 loc_type = "state" if len(ags) == 2 else ("district" if len(ags) == 5 else "municipality")
-                loc_id = _upsert_location(conn, ags, name, loc_type)
+                loc_id   = _upsert_location(conn, ags, name, loc_type)
 
                 for yr in year_cols:
                     val = row[yr]
@@ -162,15 +156,14 @@ def import_rate_per_10000(file_path: str):
                         val_f = float(str(val).replace(",", "."))
                         conn.execute(
                             """INSERT INTO statistical_values(location_id, indicator_id, year, value)
-                               VALUES(?,?,?,?)
-                               ON CONFLICT(location_id, indicator_id, year) DO UPDATE SET value=excluded.value""",
+                               VALUES(%s, %s, %s, %s)
+                               ON CONFLICT (location_id, indicator_id, year) DO UPDATE SET value=EXCLUDED.value""",
                             [loc_id, ind_id, int(yr), val_f],
                         )
                         inserted += 1
                     except (ValueError, TypeError):
                         pass
         else:
-            # LONG format: look for year column and value column
             year_col  = next((c for c in df.columns if "jahr" in c.lower() or "year" in c.lower()), None)
             val_col   = next((c for c in df.columns if "wert" in c.lower() or "rate" in c.lower() or "je" in c.lower()), None)
             key_col   = next((c for c in df.columns if "schluessel" in c.lower() or "ags" in c.lower()), None)
@@ -185,11 +178,11 @@ def import_rate_per_10000(file_path: str):
                     if not ags or not year or val is None:
                         continue
                     loc_type = "state" if len(ags) == 2 else ("district" if len(ags) == 5 else "municipality")
-                    loc_id = _upsert_location(conn, ags, name, loc_type)
+                    loc_id   = _upsert_location(conn, ags, name, loc_type)
                     conn.execute(
                         """INSERT INTO statistical_values(location_id, indicator_id, year, value)
-                           VALUES(?,?,?,?)
-                           ON CONFLICT(location_id, indicator_id, year) DO UPDATE SET value=excluded.value""",
+                           VALUES(%s, %s, %s, %s)
+                           ON CONFLICT (location_id, indicator_id, year) DO UPDATE SET value=EXCLUDED.value""",
                         [loc_id, ind_id, year, val],
                     )
                     inserted += 1
@@ -198,7 +191,7 @@ def import_rate_per_10000(file_path: str):
 
         conn.commit()
         conn.execute(
-            "UPDATE data_sources SET run_status='success', records_loaded=? WHERE source_id=?",
+            "UPDATE data_sources SET run_status='success', records_loaded=%s WHERE source_id=%s",
             [inserted, ds_id],
         )
         conn.commit()
@@ -206,7 +199,7 @@ def import_rate_per_10000(file_path: str):
 
     except Exception as exc:
         conn.execute(
-            "UPDATE data_sources SET run_status='error', error_notes=? WHERE source_id=?",
+            "UPDATE data_sources SET run_status='error', error_notes=%s WHERE source_id=%s",
             [str(exc), ds_id],
         )
         conn.commit()
@@ -222,17 +215,17 @@ def import_monthly_stats(file_path: str):
     """
     Import monthly accident totals (national level).
     Expected columns: Jahr;Monat;Unfaelle_mit_Personenschaden (or similar)
-    Stored as a national-level indicator (ags='DG' placeholder not in locations).
     """
     conn = get_connection()
 
-    cur = conn.execute(
+    row = conn.execute(
         """INSERT INTO data_sources(name, origin_url, file_name, license, run_status)
            VALUES('Destatis — Unfälle mit Personenschaden (monatlich)',
-                  'https://www.destatis.de/', ?, 'dl-de/by-2-0', 'running')""",
+                  'https://www.destatis.de/', %s, 'dl-de/by-2-0', 'running')
+           RETURNING source_id""",
         [os.path.basename(file_path)],
-    )
-    ds_id = cur.lastrowid
+    ).fetchone()
+    ds_id = row["source_id"]
     conn.commit()
 
     try:
@@ -240,7 +233,7 @@ def import_monthly_stats(file_path: str):
         df.columns = [c.strip() for c in df.columns]
         print(f"[ETL] monthly_stats: {len(df)} rows, columns={list(df.columns)}")
 
-        ind_id = _upsert_indicator(
+        _upsert_indicator(
             conn,
             "monthly_accidents_personal_injury",
             "Unfälle mit Personenschaden (monatlich, Deutschland)",
@@ -248,19 +241,22 @@ def import_monthly_stats(file_path: str):
             "Destatis",
         )
 
-        # Ensure a Germany-wide placeholder location exists
+        # Germany-wide placeholder location
         conn.execute(
             """INSERT INTO locations(ags, name, location_type)
-               VALUES('00','Deutschland','state')
-               ON CONFLICT(ags) DO NOTHING""",
+               VALUES('00', 'Deutschland', 'state')
+               ON CONFLICT (ags) DO NOTHING""",
         )
         conn.commit()
         loc = conn.execute("SELECT location_id FROM locations WHERE ags='00'").fetchone()
         loc_id = loc["location_id"] if loc else None
 
-        year_col  = next((c for c in df.columns if "jahr" in c.lower() or "year" in c.lower()), df.columns[0])
+        year_col  = next((c for c in df.columns if "jahr" in c.lower() or "year"  in c.lower()), df.columns[0])
         month_col = next((c for c in df.columns if "monat" in c.lower() or "month" in c.lower()), None)
-        val_col   = next((c for c in df.columns if "unfall" in c.lower() or "personenschaden" in c.lower() or "count" in c.lower()), None)
+        val_col   = next(
+            (c for c in df.columns if "unfall" in c.lower() or "personenschaden" in c.lower() or "count" in c.lower()),
+            None,
+        )
         if val_col is None and len(df.columns) >= 3:
             val_col = df.columns[2]
 
@@ -272,17 +268,16 @@ def import_monthly_stats(file_path: str):
                 val   = float(str(row[val_col]).replace(".", "").replace(",", ".")) if val_col else None
                 if not val or not loc_id:
                     continue
-                # Use year*100+month as a synthetic indicator code for monthly data
                 code = f"monthly_accidents_{year}_{month:02d}" if month else f"annual_accidents_{year}"
                 m_ind_id = _upsert_indicator(
                     conn, code,
                     f"Unfälle mit Personenschaden {year}" + (f"-{month:02d}" if month else ""),
-                    "accidents", "Destatis"
+                    "accidents", "Destatis",
                 )
                 conn.execute(
                     """INSERT INTO statistical_values(location_id, indicator_id, year, value)
-                       VALUES(?,?,?,?)
-                       ON CONFLICT(location_id, indicator_id, year) DO UPDATE SET value=excluded.value""",
+                       VALUES(%s, %s, %s, %s)
+                       ON CONFLICT (location_id, indicator_id, year) DO UPDATE SET value=EXCLUDED.value""",
                     [loc_id, m_ind_id, year, val],
                 )
                 inserted += 1
@@ -291,7 +286,7 @@ def import_monthly_stats(file_path: str):
 
         conn.commit()
         conn.execute(
-            "UPDATE data_sources SET run_status='success', records_loaded=? WHERE source_id=?",
+            "UPDATE data_sources SET run_status='success', records_loaded=%s WHERE source_id=%s",
             [inserted, ds_id],
         )
         conn.commit()
@@ -299,7 +294,7 @@ def import_monthly_stats(file_path: str):
 
     except Exception as exc:
         conn.execute(
-            "UPDATE data_sources SET run_status='error', error_notes=? WHERE source_id=?",
+            "UPDATE data_sources SET run_status='error', error_notes=%s WHERE source_id=%s",
             [str(exc), ds_id],
         )
         conn.commit()

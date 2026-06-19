@@ -1,9 +1,8 @@
-import sqlite3
-from typing import Optional, List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from ..database import get_db
+from ..database import DBConnection, get_db
 from ..models.schemas import LocationResponse
 
 router = APIRouter()
@@ -13,30 +12,26 @@ router = APIRouter()
     "",
     response_model=List[LocationResponse],
     summary="List locations (states, districts, municipalities)",
-    description="Filter by location_type and/or name (partial match).",
 )
 def list_locations(
-    location_type: Optional[str] = Query(
-        None, enum=["state", "district", "municipality"],
-        description="Filter by type"
-    ),
-    name: Optional[str] = Query(None, description="Partial name match (case-insensitive)"),
-    limit: int = Query(100, ge=1, le=500),
+    location_type: Optional[str] = Query(None, enum=["state", "district", "municipality"]),
+    name:   Optional[str] = Query(None, description="Partial name match (case-insensitive)"),
+    limit:  int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    db: sqlite3.Connection = Depends(get_db),
+    db: DBConnection = Depends(get_db),
 ):
     sql    = "SELECT * FROM locations WHERE 1=1"
     params = []
 
     if location_type:
-        sql += " AND location_type = ?"
+        sql += " AND location_type = %s"
         params.append(location_type)
 
     if name:
-        sql += " AND LOWER(name) LIKE ?"
+        sql += " AND LOWER(name) LIKE %s"
         params.append(f"%{name.lower()}%")
 
-    sql += " ORDER BY ags LIMIT ? OFFSET ?"
+    sql += " ORDER BY ags LIMIT %s OFFSET %s"
     params += [limit, offset]
 
     rows = db.execute(sql, params).fetchall()
@@ -50,9 +45,9 @@ def list_locations(
 )
 def get_location(
     ags: str,
-    db: sqlite3.Connection = Depends(get_db),
+    db: DBConnection = Depends(get_db),
 ):
-    row = db.execute("SELECT * FROM locations WHERE ags = ?", [ags]).fetchone()
+    row = db.execute("SELECT * FROM locations WHERE ags = %s", [ags]).fetchone()
     if not row:
         raise HTTPException(404, detail=f"Location with AGS '{ags}' not found.")
     return dict(row)

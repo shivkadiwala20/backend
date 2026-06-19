@@ -6,15 +6,13 @@ Q2  GET /accidents-by-state-year     — accident count for a state + year
 Q3  GET /earliest-year-by-state      — earliest data year for NRW
 Q4  GET /earliest-year-by-state      — earliest data year for Mecklenburg-WP
 Q5  GET /participant-accidents        — pedestrian accidents Berlin 2023
-Q6  GET /rate-per-100k               — cross-source: accidents / population
-Q7  GET /rate-per-registered-cars    — cross-source: accidents / registered cars (bonus)
+Q6  GET /rate-per-100k               — cross-source: accidents / population (Unfallatlas + Destatis)
+Q7  GET /trend-by-state              — year-over-year trend for a state
 """
-
-import sqlite3
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from ..database import get_db
+from ..database import DBConnection, get_db
 from ..models.schemas import (
     AccidentsByStateYearResponse,
     EarliestYearByStateResponse,
@@ -35,17 +33,12 @@ router = APIRouter()
     "/earliest-year",
     response_model=EarliestYearResponse,
     summary="Q1: Earliest accident year in the complete dataset",
-    description="Returns the minimum year across all imported accident events.",
 )
-def earliest_year(db: sqlite3.Connection = Depends(get_db)):
+def earliest_year(db: DBConnection = Depends(get_db)):
     row = db.execute("SELECT MIN(year) AS y FROM accident_events").fetchone()
     if not row or row["y"] is None:
         raise HTTPException(404, detail="No accident data found. Run ETL first.")
-    return {
-        "earliest_year": row["y"],
-        "source": "Unfallatlas (imported)",
-        "license": "dl-de/by-2-0",
-    }
+    return {"earliest_year": row["y"], "source": "Unfallatlas (imported)", "license": "dl-de/by-2-0"}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -55,19 +48,15 @@ def earliest_year(db: sqlite3.Connection = Depends(get_db)):
     "/accidents-by-state-year",
     response_model=AccidentsByStateYearResponse,
     summary="Q2: Total accidents with personal injury in a state for a given year",
-    description=(
-        "Counts accident_events for the given state (by AGS prefix) and year. "
-        "Example: state=Sachsen&year=2023"
-    ),
 )
 def accidents_by_state_year(
     state: str = Query(..., description="State name (e.g. Sachsen) or 2-digit AGS code"),
-    year:  int  = Query(..., ge=2016, le=2025, description="Year 2016–2025"),
-    db: sqlite3.Connection = Depends(get_db),
+    year:  int = Query(..., ge=2016, le=2025),
+    db: DBConnection = Depends(get_db),
 ):
     ags = resolve_state_ags(state)
     row = db.execute(
-        "SELECT COUNT(*) AS c FROM accident_events WHERE ags LIKE ? AND year=?",
+        "SELECT COUNT(*) AS c FROM accident_events WHERE ags LIKE %s AND year=%s",
         [f"{ags}%", year],
     ).fetchone()
     return {
@@ -86,24 +75,19 @@ def accidents_by_state_year(
     "/earliest-year-by-state",
     response_model=EarliestYearByStateResponse,
     summary="Q3/Q4: Earliest accident year available for a given state",
-    description=(
-        "Returns MIN(year) filtered by state AGS prefix. "
-        "Q3: state=Nordrhein-Westfalen  Q4: state=Mecklenburg-Vorpommern"
-    ),
+    description="Q3: state=Nordrhein-Westfalen  |  Q4: state=Mecklenburg-Vorpommern",
 )
 def earliest_year_by_state(
     state: str = Query(..., description="State name or 2-digit AGS code"),
-    db: sqlite3.Connection = Depends(get_db),
+    db: DBConnection = Depends(get_db),
 ):
     ags = resolve_state_ags(state)
     row = db.execute(
-        "SELECT MIN(year) AS y FROM accident_events WHERE ags LIKE ?",
+        "SELECT MIN(year) AS y FROM accident_events WHERE ags LIKE %s",
         [f"{ags}%"],
     ).fetchone()
     if not row or row["y"] is None:
-        raise HTTPException(
-            404, detail=f"No data found for state '{state}'. Check ETL imports."
-        )
+        raise HTTPException(404, detail=f"No data found for state '{state}'. Check ETL imports.")
     return {
         "state": STATE_NAMES.get(ags, state),
         "ags": ags,
@@ -113,26 +97,22 @@ def earliest_year_by_state(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Q5  Accidents by participant type (e.g. pedestrian) in a state + year
+# Q5  Accidents by participant type in a state + year
 # ─────────────────────────────────────────────────────────────────────────────
 @router.get(
     "/participant-accidents",
     response_model=ParticipantAccidentsResponse,
     summary="Q5: Accidents by participant type in a state and year",
-    description=(
-        "Uses the normalised accident_participants table. "
-        "Example: state=Berlin&year=2023&participant_type=pedestrian"
-    ),
+    description="Uses the normalised accident_participants table. Example: state=Berlin&year=2023&participant_type=pedestrian",
 )
 def participant_accidents(
-    state: str = Query(..., description="State name or 2-digit AGS code"),
-    year:  int  = Query(..., ge=2016, le=2025),
+    state: str = Query(...),
+    year:  int = Query(..., ge=2016, le=2025),
     participant_type: str = Query(
         "pedestrian",
         enum=["bicycle", "car", "pedestrian", "motorcycle", "truck", "other"],
-        description="Participant type to filter on",
     ),
-    db: sqlite3.Connection = Depends(get_db),
+    db: DBConnection = Depends(get_db),
 ):
     ags = resolve_state_ags(state)
     row = db.execute(
@@ -140,7 +120,7 @@ def participant_accidents(
         SELECT COUNT(DISTINCT ae.event_id) AS c
         FROM accident_events ae
         JOIN accident_participants ap ON ap.event_id = ae.event_id
-        WHERE ae.ags LIKE ? AND ae.year = ? AND ap.participant_type = ?
+        WHERE ae.ags LIKE %s AND ae.year = %s AND ap.participant_type = %s
         """,
         [f"{ags}%", year, participant_type],
     ).fetchone()
@@ -155,15 +135,15 @@ def participant_accidents(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Q6  Accident rate per 100,000 inhabitants (cross-source join)
+# Q6  Accident rate per 100,000 inhabitants (mandatory cross-source join)
 # ─────────────────────────────────────────────────────────────────────────────
 @router.get(
     "/rate-per-100k",
     response_model=RatePer100kResponse,
-    summary="Q6: Accident rate per 100,000 inhabitants (cross-source)",
+    summary="Q6: Accident rate per 100,000 inhabitants (cross-source: Unfallatlas + Destatis)",
     description=(
         "Joins accident_events (Unfallatlas) with statistical_values (Destatis population). "
-        "This is a mandatory cross-source question requiring data from two different datasets."
+        "This is the mandatory cross-source question."
     ),
 )
 def rate_per_100k(
@@ -171,7 +151,7 @@ def rate_per_100k(
     level: str = Query("state", enum=["state", "district"]),
     limit: int = Query(16, ge=1, le=50),
     order: str = Query("desc", enum=["asc", "desc"]),
-    db: sqlite3.Connection = Depends(get_db),
+    db: DBConnection = Depends(get_db),
 ):
     direction = "DESC" if order == "desc" else "ASC"
     rows = db.execute(
@@ -179,24 +159,23 @@ def rate_per_100k(
         SELECT
             l.ags,
             l.name,
-            COUNT(ae.event_id)                                   AS accident_count,
-            sv.value                                              AS population,
+            COUNT(ae.event_id)                                          AS accident_count,
+            sv.value                                                     AS population,
             CASE WHEN sv.value > 0
-                 THEN ROUND(CAST(COUNT(ae.event_id) AS REAL) / sv.value * 100000, 2)
-                 ELSE NULL END                                    AS rate_per_100k
+                 THEN ROUND(CAST(COUNT(ae.event_id) AS NUMERIC) / sv.value * 100000, 2)
+                 ELSE NULL END                                           AS rate_per_100k
         FROM accident_events ae
         JOIN locations l ON ae.location_id = l.location_id
         LEFT JOIN statistical_values sv
                ON sv.location_id = l.location_id
               AND sv.year = ae.year
               AND sv.indicator_id = (
-                  SELECT indicator_id FROM statistical_indicators
-                  WHERE code = 'population' LIMIT 1
+                  SELECT indicator_id FROM statistical_indicators WHERE code = 'population' LIMIT 1
               )
-        WHERE l.location_type = ? AND ae.year = ?
+        WHERE l.location_type = %s AND ae.year = %s
         GROUP BY l.ags, l.name, sv.value
         ORDER BY rate_per_100k {direction} NULLS LAST
-        LIMIT ?
+        LIMIT %s
         """,
         [level, year, limit],
     ).fetchall()
@@ -220,28 +199,24 @@ def rate_per_100k(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Q7  Year-over-year accident trend for a state (cross-source / time question)
+# Q7  Year-over-year accident trend for a state
 # ─────────────────────────────────────────────────────────────────────────────
 @router.get(
     "/trend-by-state",
-    summary="Q7: Year-over-year accident trend for a state (time question)",
-    description=(
-        "Returns accident counts per year for the given state, showing trend over time. "
-        "Satisfies the 'Time questions' category from the grading rubric."
-    ),
+    summary="Q7: Year-over-year accident trend for a state",
 )
 def trend_by_state(
-    state: str = Query(..., description="State name or 2-digit AGS code"),
+    state:      str = Query(...),
     start_year: int = Query(2016, ge=2016, le=2025),
     end_year:   int = Query(2025, ge=2016, le=2025),
-    db: sqlite3.Connection = Depends(get_db),
+    db: DBConnection = Depends(get_db),
 ):
     ags = resolve_state_ags(state)
     rows = db.execute(
         """
         SELECT year, COUNT(*) AS accident_count
         FROM accident_events
-        WHERE ags LIKE ? AND year BETWEEN ? AND ?
+        WHERE ags LIKE %s AND year BETWEEN %s AND %s
         GROUP BY year
         ORDER BY year
         """,

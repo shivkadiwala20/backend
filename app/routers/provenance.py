@@ -1,15 +1,14 @@
 """
 Provenance endpoints — /api/data-sources, /api/indicators
 
-These expose the lineage and license metadata stored alongside every import.
+Expose lineage and license metadata for every imported dataset.
 """
 
-import sqlite3
 from typing import List
 
 from fastapi import APIRouter, Depends
 
-from ..database import get_db
+from ..database import DBConnection, get_db
 from ..models.schemas import DataSourceResponse, IndicatorResponse
 
 router = APIRouter()
@@ -21,7 +20,7 @@ router = APIRouter()
     summary="List all data source imports with provenance and license info",
     tags=["Provenance"],
 )
-def list_data_sources(db: sqlite3.Connection = Depends(get_db)):
+def list_data_sources(db: DBConnection = Depends(get_db)):
     rows = db.execute(
         "SELECT * FROM data_sources ORDER BY retrieved_at DESC"
     ).fetchall()
@@ -34,7 +33,7 @@ def list_data_sources(db: sqlite3.Connection = Depends(get_db)):
     summary="List all statistical indicators loaded into the database",
     tags=["Provenance"],
 )
-def list_indicators(db: sqlite3.Connection = Depends(get_db)):
+def list_indicators(db: DBConnection = Depends(get_db)):
     rows = db.execute(
         "SELECT * FROM statistical_indicators ORDER BY code"
     ).fetchall()
