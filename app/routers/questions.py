@@ -162,7 +162,7 @@ def rate_per_100k(
             COUNT(ae.event_id)                                          AS accident_count,
             sv.value                                                     AS population,
             CASE WHEN sv.value > 0
-                 THEN ROUND(CAST(COUNT(ae.event_id) AS NUMERIC) / sv.value * 100000, 2)
+                 THEN ROUND(CAST(COUNT(ae.event_id) AS NUMERIC) / CAST(sv.value AS NUMERIC) * 100000, 2)
                  ELSE NULL END                                           AS rate_per_100k
         FROM accident_events ae
         JOIN locations l ON ae.location_id = l.location_id

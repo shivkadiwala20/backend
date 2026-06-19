@@ -1,5 +1,7 @@
+from datetime import datetime
+from typing import Any, List, Optional
+
 from pydantic import BaseModel
-from typing import Optional, List, Any
 
 
 class LocationResponse(BaseModel):
@@ -115,7 +117,7 @@ class DataSourceResponse(BaseModel):
     origin_url: Optional[str] = None
     file_name: Optional[str] = None
     license: Optional[str] = None
-    retrieved_at: str
+    retrieved_at: Optional[datetime] = None
     records_loaded: Optional[int] = None
     run_status: str
 
@@ -139,4 +141,4 @@ class DashboardStats(BaseModel):
     total_states: int
     total_districts: int
     year_range: dict
-    latest_import: Optional[str] = None
+    latest_import: Optional[datetime] = None

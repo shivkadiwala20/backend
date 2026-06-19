@@ -43,7 +43,7 @@ def dashboard_stats(db: DBConnection = Depends(get_db)):
         total_states=states,
         total_districts=dists,
         year_range={"min": yr_row["mn"], "max": yr_row["mx"]},
-        latest_import=str(src_row["la"]) if src_row["la"] else None,
+        latest_import=src_row["la"],
     )
 
 
@@ -94,7 +94,7 @@ def by_location(
             COUNT(DISTINCT ae.event_id) AS accident_count,
             sv.value                    AS population,
             CASE WHEN sv.value > 0
-                 THEN ROUND(CAST(COUNT(DISTINCT ae.event_id) AS NUMERIC) / sv.value * 100000, 2)
+                 THEN ROUND(CAST(COUNT(DISTINCT ae.event_id) AS NUMERIC) / CAST(sv.value AS NUMERIC) * 100000, 2)
                  ELSE NULL END          AS rate_per_100k
         FROM locations l
         LEFT JOIN accident_events ae ON ae.location_id = l.location_id
@@ -169,7 +169,7 @@ def top_locations(
             COUNT(ae.event_id)  AS accident_count,
             sv.value            AS population,
             CASE WHEN sv.value > 0
-                 THEN ROUND(CAST(COUNT(ae.event_id) AS NUMERIC) / sv.value * 100000, 2)
+                 THEN ROUND(CAST(COUNT(ae.event_id) AS NUMERIC) / CAST(sv.value AS NUMERIC) * 100000, 2)
                  ELSE NULL END  AS rate_per_100k
         FROM accident_events ae
         JOIN locations l ON ae.location_id = l.location_id
